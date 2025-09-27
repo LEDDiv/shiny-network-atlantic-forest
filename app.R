@@ -8,8 +8,11 @@ options(
     )
 )
 
-if (!require(tidyverse)) install.packages("tidyverse")
+if (!require(dplyr)) install.packages("dplyr")
+if (!require(magrittr)) install.packages("magrittr")
+if (!require(readr)) install.packages("readr")
 if (!require(shiny)) install.packages("shiny")
+if (!require(shinythemes)) install.packages("shinythemes")
 if (!require(leaflet)) install.packages("leaflet")
 if (!require(sf)) install.packages("sf")
 if (!require(arrow)) install.packages("arrow", repos = "https://packagemanager.rstudio.com/all/__linux__/focal/latest")
@@ -19,9 +22,8 @@ if (!require(igraph)) install.packages("igraph")
 if (!require(network)) install.packages("network")
 if (!require(GGally)) install.packages("GGally")
 
-# Carrega os dados
-grid <- sf::st_read("data/grid.gpkg") %>% 
-  dplyr::slice(1:1000) # remover para rodar todas as celulas
+# import data
+grid <- sf::st_read("data/grid.gpkg")
 lim <- sf::st_read("data/lim.gpkg")
 
 # Calcula bbox do lim para usar no zoom
@@ -39,6 +41,8 @@ grid_coords <- grid %>%
 
 # ui ----
 ui <- fluidPage(
+  
+  theme = shinytheme("flatly"),
   
   titlePanel("Ecological networks of the Atlantic Forest"),
   
@@ -68,7 +72,7 @@ ui <- fluidPage(
     
       tags$hr(),
       h4("Network visualization"),
-      plotOutput("network_plot", height = "400px")),
+      plotOutput("network_plot", height = "300px")),
 
     mainPanel(
       width = 9,
@@ -187,59 +191,41 @@ server <- function(input, output, session) {
     clicked_cell_data(NULL)
   })
   
-  # Network plot
   output$network_plot <- renderPlot({
     local_edge <- clicked_cell_data()
+    validate(need(!is.null(local_edge), "Select a cell to view its network"))
     
-    if (!is.null(local_edge)) {
-      # Prepare network data
-      edge_l <- data.frame(
-        frug = local_edge[,1], 
-        plant = local_edge[,2], 
-        weights = local_edge[,3]
-      )
-      
-      # Create network object
-      G1 <- network(edge_l, bipartite = TRUE)
-      
-      # Calculate species degree
-      degree <- c(
-        tapply(local_edge$int_freq, INDEX = local_edge$frug_sp, sum),
-        tapply(local_edge$int_freq, INDEX = local_edge$plant_sp, sum)
-      )
-      
-      # Match vertex order
-      aux.order <- match(network.vertex.names(G1), names(degree))
-      
-      # Create network plot
-      ggnet2(
-        G1, 
-        color = "mode",
-        palette = c("actor" = "#DEAA79", "event" = "#659287"),
-        mode = "fruchtermanreingold",
-        layout.par = list(cell.jitter = 0.75),
-        size = degree[aux.order],
-        size.min = 1,
-        size.max = 15,
-        edge.color = "#CCC4C8",
-        edge.alpha = 0.5,
-        edge.size = 0.3,
-        legend.position = "none"
-      ) + 
-        theme(panel.background = element_rect(fill = "white"))
-    } else if (!is.null(input$cell_select) && !is.na(input$cell_select)) {
-      # Show empty plot with message if no data available
-      print(local_edge)
-      ggplot() +
-        annotate("text", x = 0.5, y = 0.5, label = "No network data available for this cell") +
-        theme_void()
-    } else {
-      # Show empty plot with message if no cell selected
-      ggplot() +
-        annotate("text", x = 0.5, y = 0.5, label = "Select a cell to view its network") +
-        theme_void()
-    }
+    # network
+    G <- graph_from_edgelist(as.matrix(local_edge[,1:2]), directed = FALSE)
+    E(G)$weights <- local_edge[,3]
+    L <- layout.fruchterman.reingold(G)
+    
+    # species degree
+    degree <- c(tapply(local_edge$int_freq, INDEX = local_edge$frug_sp, sum),
+                tapply(local_edge$int_freq, INDEX = local_edge$plant_sp, sum))
+    
+    most.conn <- order(degree, decreasing = T)[1:10]
+    
+    # vertex colors #CORRIGIR
+    colors <- c(rep('#DEAA79',length(unique(local_edge[,1]))),
+                rep('#659287',length(unique(local_edge[,2]))))
+    
+    # edge color gradient
+    CRP <- colorRampPalette(c('white',"lightgray", "darkgray", "black"))
+    # edge_col <- CRP(10)[base::cut(E(G)$weights, breaks = 10)]
+    
+    V(G)$label <- NA
+    V(G)$label[most.conn] <- names(degree[most.conn])
+    
+    
+    plot(G, layout = L, vertex.color = colors, vertex.size = 2+log(1+degree),
+         vertex.label = NA,
+         vertex.label.color = 'black',  vertex.label.cex = 1, 
+         # edge.color = edge_col 
+    )
+    
   })
+  
   
   # Download handler para exportar os dados da rede como CSV
   output$download_network <- downloadHandler(
