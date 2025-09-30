@@ -5,8 +5,6 @@ account: mauricio-vancine
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 15179752
-bundleId: 10961756
+bundleId:
 url: https://mauricio-vancine.shinyapps.io/atlantic-forest-networks/
 version: 1
-asMultiple: FALSE
-asStatic: FALSE
