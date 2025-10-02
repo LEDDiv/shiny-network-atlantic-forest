@@ -22,44 +22,23 @@ if (!require(scales)) install.packages("scales")
 if (!require(igraph)) install.packages("igraph")
 if (!require(network)) install.packages("network")
 if (!require(leaflet)) install.packages("leaflet")
+if (!require(shinyjs)) install.packages("shinyjs")
 
 # import data
-grid <- st_read("data/grid.gpkg")
 lim <- st_read("data/lim.gpkg")
-
-# colors
-eco_colors <- c(
-  "Alto Paraná Atlantic forests"="#51723b", 
-  "Araucaria moist forests"="#89a194", 
-  "Atlantic Coast restingas"="#ca9cc6", 
-  "Bahia coastal forests" = "#a14016", 
-  "Bahia interior forests" = "#cc883a", 
-  "Brazilian Atlantic dry forests"="#cfc89a",
-  "Caatinga Enclaves moist forests"="#8e1418", 
-  "Pernambuco coastal forests"="#45769e", 
-  "Pernambuco interior forests"="#a3bde5",
-  "Serra do Mar coastal forests"="#563d65",
-  "Southern Atlantic Brazilian mangroves"="#ead862") 
-eco_colors
+grid_5km <- st_read("data/grid.gpkg")
 
 # Calcula bbox do lim para usar no zoom
 lim_bbox <- lim %>% 
+  st_buffer(-.5) %>% 
   st_transform(4326) %>% 
   st_bbox() %>% 
   as.numeric()
 
-# Converte grid para data.frame com coordenadas (centroide)
-grid_coords <- grid %>% 
-  st_transform(4326) %>% 
-  mutate(lon = st_coordinates(st_centroid(grid))[,1],
-         lat = st_coordinates(st_centroid(grid))[,2]) %>% 
-  st_drop_geometry()
-
-# Extrai ecorregiões únicas
-ecoregions <- sort(unique(grid$ECO_NAME))
-
 # ui ----
 ui <- fluidPage(
+  
+  useShinyjs(),  # Adiciona shinyjs
   
   theme = shinytheme("flatly"),
   
@@ -67,30 +46,17 @@ ui <- fluidPage(
   
   sidebarLayout(
     position = "right",
+    
     sidebarPanel(
-      width = 3,
-      selectizeInput(
-        "ecoregion_select", 
-        "Filter by ecoregion:", 
-        choices = ecoregions,
-        selected = ecoregions[1]
-      ),
-      selectizeInput(
-        "cell_select", 
-        "Find cell by ID:", 
-        choices = NULL,
-        options = list(
-          placeholder = 'Select a cell or type to search',
-          onInitialize = I('function() { this.setValue(""); }')
-        )
-      ),
-      actionButton("reset_zoom", "Reset Zoom", icon = icon("search-minus")),
       
-      tags$hr(),
-      h5("Find cell by coordinates"),
-      numericInput("lat_input", "Latitude:", value = -25, step = 0.01),
-      numericInput("lon_input", "Longitude:", value = -44, step = 0.01),
+      width = 5,
+
+      h5("Find cell by coordinates (it takes a while)"),
+      numericInput("lon_input", "Longitude:", value = -42, step = 0.01),
+      numericInput("lat_input", "Latitude:", value = -23, step = 0.01),
       actionButton("find_cell_btn", "Find nearest cell"),
+      
+      actionButton("reset_zoom", "Reset Zoom", icon = icon("search-minus")),
       
       tags$hr(),
       downloadButton("download_network", "Download network data (.csv)"),
@@ -98,11 +64,13 @@ ui <- fluidPage(
       
       tags$hr(),
       h4("Network visualization"),
-      plotOutput("network_plot", height = "300px")),
-    
+      plotOutput("network_plot", height = "430px", width = "730px"),
+      
+      h6(HTML('Developed by: <a href="https://www.mathiasmpires.net.br/index.html" target="_blank" rel="noopener">Laboratory for studies on the structure and dynamics of diversity (LDDiv)</a>.'))
+    ),
     mainPanel(
-      width = 9,
-      leafletOutput("map", height = "85vh")
+      width = 7,
+      leafletOutput("map", height = "90vh")
     )
   )
 )
@@ -110,33 +78,15 @@ ui <- fluidPage(
 # server ----
 server <- function(input, output, session) {
   
-  # Reactive value para armazenar grid filtrado
-  filtered_grid <- reactiveVal(grid)
-  
-  # Atualiza o selectizeInput com as opções baseadas no grid filtrado
-  observe({
-    current_grid <- filtered_grid()
-    updateSelectizeInput(
-      session, 
-      "cell_select", 
-      choices = c("None" = NA, sort(current_grid$id)), 
-      server = TRUE
-    )
-  })
-  
-  # Filtra grid baseado na ecorregião selecionada
-  observeEvent(input$ecoregion_select, {
-    filtered_grid(grid %>% filter(ECO_NAME == input$ecoregion_select))
-  })
-  
-  # Reactive value to store clicked cell data
-  clicked_cell_data <- reactiveVal(NULL)
-  
   # Reactive value to store network plot
   network_plot_obj <- reactiveVal(NULL)
   
-  # Mapa inicial
+  # Reactive value para armazenar dados da célula clicada
+  clicked_cell_data <- reactiveVal(NULL)
+  
+  # Mapa inicial - mostra todos os grids de 100km e limites
   output$map <- renderLeaflet({
+    
     leaflet() %>%
       addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
       addProviderTiles("CartoDB.Positron", group = "Light") %>%
@@ -147,134 +97,151 @@ server <- function(input, output, session) {
         baseGroups = c("Satellite", "Light", "Street", "Dark", "Terrain"),
         options = layersControlOptions(collapsed = FALSE, position = "topright")
       ) %>%
+      
       addPolygons(
         data = lim,
         color = "black",
         fill = TRUE,
-        fillColor = as.character(eco_colors),
+        fillColor = "black",
         weight = 3,
         fillOpacity = 0.3,
         label = "Atlantic Forest",
         group = "lim"
-      )
+      ) %>%
+      fitBounds(lng1 = lim_bbox[1], lat1 = lim_bbox[2], 
+                lng2 = lim_bbox[3], lat2 = lim_bbox[4])
   })
   
-  # Atualiza o mapa quando o grid filtrado muda
-  observeEvent(filtered_grid(), {
-    current_grid <- filtered_grid()
-    
-    # Obtém a cor correspondente para a ecorregião selecionada
-    current_ecoregion <- input$ecoregion_select
-    fill_color <- "black"
-    
-    leafletProxy("map") %>%
-      clearGroup("grid") %>%
-      addPolygons(
-        data = current_grid,
-        color = fill_color,
-        weight = 1,
-        fillColor = fill_color,
-        fillOpacity = 0.6,
-        label = ~paste("Cell ID:", id, "<br>Ecoregion:", ECO_NAME),
-        group = "grid",
-        layerId = ~as.character(id),
-        highlightOptions = highlightOptions(
-          color = "white",
-          weight = 3,
-          bringToFront = TRUE
-        )
-      )
-    
-    # Se há células no grid filtrado, ajusta o zoom
-    if (nrow(current_grid) > 0) {
-      bbox <- current_grid %>% 
-        st_geometry() %>% 
-        st_transform(4326) %>% 
-        st_bbox() %>% 
-        as.numeric()
-      
-      leafletProxy("map") %>%
-        fitBounds(lng1 = bbox[1], lat1 = bbox[2], 
-                  lng2 = bbox[3], lat2 = bbox[4])
-    }
-  })
-  
-  # Observe cell clicks
+  # Observe clicks no mapa - apenas para células
   observeEvent(input$map_shape_click, {
     click <- input$map_shape_click
-    if (!is.null(click$id) && click$group == "grid") {
-      cell_id <- as.numeric(click$id)
-      updateSelectizeInput(session, "cell_select", selected = cell_id)
-      
-      # Zoom to the clicked cell
-      selected_cell <- filtered_grid() %>% filter(id == cell_id)
-      bbox <- selected_cell %>% 
-        st_geometry() %>% 
-        st_transform(4326) %>% 
-        st_bbox() %>% 
-        as.numeric()
-      
-      leafletProxy("map") %>%
-        clearGroup("selected_cell") %>%
-        addPolygons(
-          data = selected_cell,
-          group = "selected_cell",
-          color = "darkgreen",
-          weight = 2,
-          fillOpacity = 0.5,
-          label = ~paste("Célula:", id)
-        ) %>%
-        flyToBounds(
-          lng1 = bbox[1],
-          lat1 = bbox[2],
-          lng2 = bbox[3],
-          lat2 = bbox[4]
-        )
-      
-      # Load and process network data
-      file_path <- file.path("https://leddiv.github.io/ms-atlantic-forest-networks-edge-lists/edge_list/", 
-                             paste0("edgelist_", cell_id, "_compressed.parquet"))
-      tryCatch({
-        local_edge <- arrow::read_parquet(file_path)
-        print(local_edge)
-        clicked_cell_data(local_edge)
-      }, error = function(e) {
-        clicked_cell_data(NULL)
-        showNotification("Error loading cell data", type = "error")
-      })
+    
+    if (!is.null(click$id) && grepl("cell_", click$id)) {
+      cell_id <- as.numeric(gsub("cell_", "", click$id))
+      show_selected_cell(cell_id)
     }
   })
   
-  # Função para resetar o zoom
-  observeEvent(input$reset_zoom, {
-    current_grid <- filtered_grid()
-    
-    if (nrow(current_grid) > 0) {
-      bbox <- current_grid %>% 
-        st_geometry() %>% 
-        st_transform(4326) %>% 
-        st_bbox() %>% 
-        as.numeric()
+  # Função auxiliar para mostrar uma célula no mapa
+  show_selected_cell <- function(cell_id) {
+    tryCatch({
+      # Encontra a célula no grid completo
+      selected_cell <- grid_5km %>% filter(id == cell_id)
       
-      leafletProxy("map") %>%
-        clearGroup("selected_cell") %>%
-        fitBounds(lng1 = bbox[1], lat1 = bbox[2], 
-                  lng2 = bbox[3], lat2 = bbox[4])
-    } else {
-      leafletProxy("map") %>%
-        clearGroup("selected_cell") %>%
-        fitBounds(lng1 = lim_bbox[1], lat1 = lim_bbox[2], 
-                  lng2 = lim_bbox[3], lat2 = lim_bbox[4])
-    }
+      if (nrow(selected_cell) > 0) {
+        bbox <- selected_cell %>% 
+          st_geometry() %>% 
+          st_transform(4326) %>% 
+          st_bbox() %>% 
+          as.numeric()
+        
+        leafletProxy("map") %>%
+          clearGroup("selected_cell") %>%
+          addPolygons(
+            data = selected_cell,
+            group = "selected_cell",
+            color = "darkgreen",
+            weight = 3,
+            fillColor = "green",
+            fillOpacity = 0.3,
+            label = ~paste("Selected Cell:", id)
+          ) %>%
+          flyToBounds(
+            lng1 = bbox[1],
+            lat1 = bbox[2],
+            lng2 = bbox[3],
+            lat2 = bbox[4]
+          )
+        
+        # Importa parquet associado, se existir
+        file_path <- file.path("https://leddiv.github.io/ms-atlantic-forest-networks-edge-lists/edge_list/", 
+                               paste0("edgelist_", cell_id, "_compressed.parquet"))
+        tryCatch({
+          local_edge <- arrow::read_parquet(file_path)
+          clicked_cell_data(local_edge)
+          showNotification(paste("Network data loaded for cell", cell_id), type = "message")
+        }, error = function(e) {
+          clicked_cell_data(NULL)
+          showNotification(paste("No network data available for cell", cell_id), type = "warning")
+        })
+      } else {
+        showNotification("Selected cell not found", type = "warning")
+      }
+    }, error = function(e) {
+      showNotification(paste("Error showing cell:", e$message), type = "error")
+    })
+  }
+  
+  # reset zoom ----
+  observeEvent(input$reset_zoom, {
+    leafletProxy("map") %>%
+      fitBounds(lng1 = lim_bbox[1], lat1 = lim_bbox[2],
+                lng2 = lim_bbox[3], lat2 = lim_bbox[4]) %>%
+      clearGroup("selected_cell")
     
-    updateSelectizeInput(session, "cell_select", selected = NA)
     clicked_cell_data(NULL)
     network_plot_obj(NULL)
   })
   
+  # Reação ao botão "Find nearest cell" - BUSCA EM TODAS AS CÉLULAS
+  observeEvent(input$find_cell_btn, {
+    req(input$lat_input, input$lon_input)
+    
+    # Validação das coordenadas
+    if (is.na(input$lat_input) || is.na(input$lon_input)) {
+      showNotification("Please enter valid coordinates", type = "warning")
+      return()
+    }
+    
+    # Verifica se as coordenadas estão dentro de limites razoáveis
+    if (input$lon_input < -57 || input$lon_input > -35 || input$lat_input < -35 || input$lat_input > -3) {
+      showNotification("Please enter valid coordinates (Lon: -57 to -35 | Lat: -35 to -3)", type = "warning")
+      return()
+    }
+    
+    tryCatch({
+      
+      # Converte grid para data.frame com coordenadas (centroide)
+      input_buffer <- sf::st_as_sf(tibble::tibble(
+        lon = input$lon_input,
+        lat = input$lat_input),
+        coords = c("lon", "lat"),
+        crs = 4326) %>%
+        terra::vect() %>% 
+        terra::buffer(100000) %>% 
+        sf::st_as_sf()
+      print(input_buffer)
+      
+      grid_buffer <- grid_5km[input_buffer, ]
+      print(grid_buffer)
+      
+      grid_coords <- grid_buffer %>%
+        st_transform(4326) %>%
+        mutate(lon = st_coordinates(st_centroid(grid_buffer))[,1],
+               lat = st_coordinates(st_centroid(grid_buffer))[,2]) %>%
+        st_drop_geometry()
+      
+      # Calcula distância de TODAS as células ao ponto digitado
+      dist_to_point <- geosphere::distm(
+        grid_coords[, c("lon", "lat")],
+        matrix(c(input$lon_input, input$lat_input), ncol = 2)
+      )
+      
+      # Identifica a célula mais próxima entre TODAS as células
+      nearest_index <- which.min(dist_to_point)
+      nearest_cell_id <- grid_coords$id[nearest_index]
+      
+      # Seleciona a célula mais próxima
+      show_selected_cell(nearest_cell_id)
+      
+    }, error = function(e) {
+      showNotification(paste("Error finding cell:", e$message), type = "error")
+    })
+  })
+  
   # Função para criar o plot da rede
   create_network_plot <- function(local_edge) {
-
+    
     # network
     G <- graph_from_edgelist(as.matrix(local_edge[,1:2]), directed = FALSE)
     E(G)$weights <- local_edge[,3]
@@ -286,13 +253,12 @@ server <- function(input, output, session) {
     
     most.conn <- order(degree, decreasing = T)[1:10]
     
-    # vertex colors #CORRIGIR
+    # vertex colors
     colors <- c(rep('#DEAA79',length(unique(local_edge[,1]))),
                 rep('#659287',length(unique(local_edge[,2]))))
     
     # edge color gradient
     CRP <- colorRampPalette(c('white',"lightgray", "darkgray", "black"))
-    # edge_col <- CRP(10)[base::cut(E(G)$weights, breaks = 10)]
     
     V(G)$label <- NA
     V(G)$label[most.conn] <- names(degree[most.conn])
@@ -302,8 +268,7 @@ server <- function(input, output, session) {
          vertex.size = 2+log(1+degree),
          vertex.label = NA,
          vertex.label.color = 'black',  
-         vertex.label.cex = 1, 
-         # edge.color = edge_col 
+         vertex.label.cex = 1
     )
   }
   
@@ -319,8 +284,13 @@ server <- function(input, output, session) {
   # Download handler para exportar os dados da rede como CSV
   output$download_network <- downloadHandler(
     filename = function() {
-      cell_id <- input$cell_select
-      paste0("network_cell_", cell_id, ".csv")
+      cell_id <- if (!is.null(clicked_cell_data())) {
+        # Extrai o ID da célula dos dados (assumindo que está em algum lugar dos dados)
+        # Você pode precisar ajustar isso dependendo da estrutura dos seus dados
+        "network_data.csv"
+      } else {
+        "network_data.csv"
+      }
     },
     content = function(file) {
       local_edge <- clicked_cell_data()
@@ -335,8 +305,7 @@ server <- function(input, output, session) {
   # Download handler para exportar a imagem da rede como PNG
   output$download_network_image <- downloadHandler(
     filename = function() {
-      cell_id <- input$cell_select
-      paste0("network_plot_cell_", cell_id, ".png")
+      "network_plot.png"
     },
     content = function(file) {
       local_edge <- clicked_cell_data()
@@ -355,111 +324,6 @@ server <- function(input, output, session) {
       }
     }
   )
-  
-  # Reação à seleção direta de célula
-  observeEvent(input$cell_select, {
-    if (!is.na(input$cell_select)) {
-      show_selected_cell(as.numeric(input$cell_select))
-    } else {
-      current_grid <- filtered_grid()
-      
-      if (nrow(current_grid) > 0) {
-        bbox <- current_grid %>% 
-          st_geometry() %>% 
-          st_transform(4326) %>% 
-          st_bbox() %>% 
-          as.numeric()
-        
-        leafletProxy("map") %>%
-          clearGroup("selected_cell") %>%
-          fitBounds(lng1 = bbox[1], lat1 = bbox[2], 
-                    lng2 = bbox[3], lat2 = bbox[4])
-      } else {
-        leafletProxy("map") %>%
-          clearGroup("selected_cell") %>%
-          fitBounds(lng1 = lim_bbox[1], lat1 = lim_bbox[2], 
-                    lng2 = lim_bbox[3], lat2 = lim_bbox[4])
-      }
-      
-      clicked_cell_data(NULL)
-      network_plot_obj(NULL)
-    }
-  })
-  
-  # Reação ao botão "Find nearest cell"
-  observeEvent(input$find_cell_btn, {
-    req(input$lat_input, input$lon_input)
-    
-    current_grid <- filtered_grid()
-    
-    if (nrow(current_grid) > 0) {
-      # Converte grid filtrado para coordenadas
-      current_coords <- current_grid %>% 
-        st_transform(4326) %>% 
-        mutate(lon = st_coordinates(st_centroid(.))[,1],
-               lat = st_coordinates(st_centroid(.))[,2]) %>% 
-        st_drop_geometry()
-      
-      # Calcula distância de cada célula ao ponto digitado
-      dist_to_point <- distm(
-        current_coords[, c("lon", "lat")],
-        matrix(c(input$lon_input, input$lat_input), ncol = 2)
-      )
-      
-      # Identifica a célula mais próxima
-      nearest_index <- which.min(dist_to_point)
-      nearest_cell_id <- current_coords$id[nearest_index]
-      
-      # Atualiza o selectInput e chama o observeEvent correspondente
-      updateSelectizeInput(session, "cell_select", selected = nearest_cell_id)
-    } else {
-      showNotification("No cells available in the current filter", type = "warning")
-    }
-  })
-  
-  # Função auxiliar para mostrar uma célula no mapa
-  show_selected_cell <- function(cell_id) {
-    current_grid <- filtered_grid()
-    selected_cell <- current_grid %>% filter(id == cell_id)
-    
-    if (nrow(selected_cell) > 0) {
-      bbox <- selected_cell %>% 
-        st_geometry() %>% 
-        st_transform(4326) %>% 
-        st_bbox() %>% 
-        as.numeric()
-      
-      leafletProxy("map") %>%
-        clearGroup("selected_cell") %>%
-        addPolygons(
-          data = selected_cell,
-          group = "selected_cell",
-          color = "darkgreen",
-          weight = 2,
-          fillOpacity = 0.5,
-          label = ~paste("Célula:", id)
-        ) %>%
-        flyToBounds(
-          lng1 = bbox[1],
-          lat1 = bbox[2],
-          lng2 = bbox[3],
-          lat2 = bbox[4]
-        )
-      
-      # Importa parquet associado, se existir
-      file_path <- file.path("https://leddiv.github.io/ms-atlantic-forest-networks-edge-lists/edge_list/", 
-                             paste0("edgelist_", cell_id, "_compressed.parquet"))
-      tryCatch({
-        local_edge <- arrow::read_parquet(file_path)
-        clicked_cell_data(local_edge)
-      }, error = function(e) {
-        clicked_cell_data(NULL)
-        showNotification("Error loading cell data", type = "error")
-      })
-    } else {
-      showNotification("Selected cell not found in current filter", type = "warning")
-    }
-  }
 }
 
 shinyApp(ui, server)
