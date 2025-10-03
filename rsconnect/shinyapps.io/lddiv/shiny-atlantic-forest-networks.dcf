@@ -5,7 +5,7 @@ account: lddiv
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 15598808
-bundleId: 10979986
+bundleId: 10985750
 url: https://lddiv.shinyapps.io/shiny-atlantic-forest-networks/
 version: 1
 asMultiple: FALSE

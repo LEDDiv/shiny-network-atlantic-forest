@@ -49,27 +49,29 @@ ui <- fluidPage(
     
     sidebarPanel(
       
-      width = 5,
+      width = 4,
 
-      h5("Find cell by coordinates (it takes a while)"),
+      h4("Find network by coordinates (it takes a while)"),
       numericInput("lon_input", "Longitude:", value = -42, step = 0.01),
-      numericInput("lat_input", "Latitude:", value = -23, step = 0.01),
-      actionButton("find_cell_btn", "Find nearest cell"),
+      numericInput("lat_input", "Latitude:", value = -3, step = 0.01),
       
+      actionButton("find_cell_btn", "Find nearest cell"),
       actionButton("reset_zoom", "Reset Zoom", icon = icon("search-minus")),
       
-      tags$hr(),
+      br(),
+      
+      h4("Network visualization"),
+      plotOutput("network_plot", width = "570px", height = "340px"),
+      
+      br(),
+      
       downloadButton("download_network", "Download network data (.csv)"),
       downloadButton("download_network_image", "Download network image (.png)"),
-      
-      tags$hr(),
-      h4("Network visualization"),
-      plotOutput("network_plot", height = "430px", width = "730px"),
       
       h6(HTML('Developed by: <a href="https://www.mathiasmpires.net.br/index.html" target="_blank" rel="noopener">Laboratory for studies on the structure and dynamics of diversity (LDDiv)</a>.'))
     ),
     mainPanel(
-      width = 7,
+      width = 8,
       leafletOutput("map", height = "90vh")
     )
   )
@@ -154,8 +156,8 @@ server <- function(input, output, session) {
           )
         
         # Importa parquet associado, se existir
-        file_path <- file.path("https://leddiv.github.io/ms-atlantic-forest-networks-edge-lists/edge_list/", 
-                               paste0("edgelist_", cell_id, "_compressed.parquet"))
+        file_path <- file.path("https://leddiv.github.io/ms-atlantic-forest-networks-edge-lists/edge_list_filtered/", 
+                               paste0("edgelist_filter", cell_id, ".parquet"))
         tryCatch({
           local_edge <- arrow::read_parquet(file_path)
           clicked_cell_data(local_edge)
@@ -210,11 +212,9 @@ server <- function(input, output, session) {
         terra::vect() %>% 
         terra::buffer(100000) %>% 
         sf::st_as_sf()
-      print(input_buffer)
-      
+
       grid_buffer <- grid_5km[input_buffer, ]
-      print(grid_buffer)
-      
+
       grid_coords <- grid_buffer %>%
         st_transform(4326) %>%
         mutate(lon = st_coordinates(st_centroid(grid_buffer))[,1],
